@@ -3,6 +3,12 @@
 ##
 ## Get latest from https://github.com/github/gitignore/blob/master/VisualStudio.gitignore
 
+tmp
+Speedreader/Speedreader_log.html
+Speedreader/Engine
+Speedreader/Example
+Speedreader/speedreader.zip
+
 # User-specific files
 *.suo
 *.user

@@ -1,14 +1,22 @@
 ﻿#include <Siv3D.hpp>
 #include <cstdio>
 #include <string>
+#include <thread>
+#include <vector>
 #include "Main.h"
+
+# include <ppl.h>
+# include <ppltasks.h>
+
 
 #ifdef DEPLOY
 std::wstring currentDocument(L"./doc/");
 std::wstring configFile(L"./speedreader.ini");
+std::wstring sampleDocument(L"./sample/");
 #else
-std::wstring currentDocument(L"C:/Users/nishio/Desktop/speedreader/");
-std::wstring configFile(L"C:/Users/nishio/Desktop/speedreader.ini");
+std::wstring currentDocument(L"../Speedreader/speedreader/doc/");
+std::wstring configFile(L"../Speedreader/speedreader.ini");
+std::wstring sampleDocument(L"../Speedreader/speedreader/sample/");
 #endif
 
 const int maxPages = 1000;
@@ -21,6 +29,146 @@ int loadingPage = 0;
 double viewingPage = 0;
 int displayMode = 1;
 int autoplaySpeed = 0;
+int debugTexureLoadingBenchmark;
+
+namespace s3d
+{
+	class TextureLoader // https://gist.github.com/Reputeless/780ac14c679c9f0a7d40e316171421ee
+	{
+	private:
+
+		Array<FilePath> m_paths;
+
+		Array<Image> m_images;
+
+		Array<concurrency::task<void>> m_tasks;
+
+		Array<Texture> m_textures;
+
+		Array<bool> m_states;
+
+		uint32 m_count_done = 0;
+
+		bool m_isActive = false;
+
+	public:
+
+		TextureLoader() = default;
+
+		TextureLoader(const Array<FilePath>& paths, bool startImmediately = false)
+			: m_paths(paths)
+			, m_images(paths.size())
+			, m_textures(paths.size())
+			, m_states(paths.size())
+		{
+			if (startImmediately)
+			{
+				start();
+			}
+		}
+
+		~TextureLoader()
+		{
+			wait_all();
+		}
+
+		void start()
+		{
+			if (m_isActive)
+			{
+				return;
+			}
+
+			for (size_t i = 0; i < m_paths.size(); ++i)
+			{
+				m_tasks.emplace_back(concurrency::create_task(
+					[&path = m_paths[i], &image = m_images[i]]()
+				{
+					image = Image(path);
+				}));
+			}
+
+			m_isActive = true;
+
+			return;
+		}
+
+		void update(int32 maxTextureCreationPerFrame = 4)
+		{
+			if (!m_isActive || done())
+			{
+				return;
+			}
+
+			const int32 max = std::max(1, maxTextureCreationPerFrame);
+			int32 n = 0;
+
+			for (size_t i = 0; i < m_paths.size(); ++i)
+			{
+				if (!m_states[i] && m_tasks[i].is_done())
+				{
+					m_textures[i] = Texture(m_images[i]);
+
+					m_images[i].release();
+
+					m_states[i] = true;
+
+					++m_count_done;
+
+					if (++n >= maxTextureCreationPerFrame)
+					{
+						break;
+					}
+				}
+			}
+		}
+
+		size_t num_loaded() const
+		{
+			return m_count_done;
+		}
+
+		size_t size() const
+		{
+			return m_paths.size();
+		}
+
+		void wait_all()
+		{
+			when_all(std::begin(m_tasks), std::end(m_tasks)).wait();
+		}
+
+		bool isActive()
+		{
+			return m_isActive;
+		}
+
+		bool done() const
+		{
+			return num_loaded() == size();
+		}
+
+		const Array<bool>& getStates() const
+		{
+			return m_states;
+		}
+
+		bool getStates(size_t index) const
+		{
+			return m_states[index];
+		}
+
+		const Array<Texture>& getTextures() const
+		{
+			return m_textures;
+		}
+
+		const Texture& getTexture(size_t index) const
+		{
+			return m_textures[index];
+		}
+	};
+}
 
 Texture loadOneTexture(int fileid) {
 	wchar filename[128];
@@ -46,6 +194,7 @@ void updateConfig(INIReader	config) {
 	config.reload();
 	joystickPointerSpeed = config.getOr<double>(L"Controller.PointerSpeed", 1.0);
 	drawingXOffset = config.getOr<int>(L"Drawing.XOffset", 100);
+	debugTexureLoadingBenchmark = config.getOr<int>(L"Debug.TextureLoadingBenchmark", 0);
 }
 
 void loadNewDocument(const wchar* path) {
@@ -58,8 +207,81 @@ void loadNewDocument(const wchar* path) {
 	displayMode = 1;
 }
 
+std::vector<Texture> ts;
+void benchmark() {
+	Stopwatch stopwatch;
+	Profiler::EnableWarning(false);
+	Println(L"runnning benchmark");
+
+	stopwatch.start();
+	for (auto i : step(100)) {
+		/*
+		Image(
+			Format(L"C:/Users/nishio/Desktop/images/pages_{:04d}.png"_fmt, i + 1)
+		).save(
+			Format(L"C:/Users/nishio/Desktop/images/pages_{:04d}.dds"_fmt, i + 1)
+		);
+		*/ // 39752msec
+		//ts.emplace_back(Format(L"C:/Users/nishio/Desktop/images/pages_{:04d}.dds"_fmt, i + 1));
+		ts.emplace_back(Format(L"{}pages_{:04d}.png"_fmt, sampleDocument, i + 1));
+	}
+	Println(stopwatch.ms());
+	pageTextures[0] = ts[0];
+	pageTextures[1] = ts[1];
+}
+
+void benchmark2() {
+	Stopwatch stopwatch(true);
+	Window::Resize(1300, 700);
+	Println(L"runnning benchmark2");
+	Array<FilePath> paths;
+	for (auto i : step(100))
+		paths.push_back(Format(L"{}pages_{:04d}.png"_fmt, sampleDocument, i + 1));
+
+	const bool startImmediately = true;
+
+	// バックグラウンド & マルチスレッドで、paths で指定した画像を読み込み開始
+	TextureLoader loader(paths, startImmediately);
+	Stopwatch stopwatch2(true);
+	while (System::Update())
+	{
+		if (loader.isActive() && !loader.done())
+		{
+			// ロードが完了した画像から順次 Texture を作成する。
+			// 1 回の upadate で作成する Texture の最大数を少なくすると、フレームレートの低下を防げるが、
+			// 最大数が 1　だと、100 枚の Texture を作成するには最低でも 100 フレーム必要になる。
+			const int32 maxTextureCreationPerFrame = 1;
+			loader.update(maxTextureCreationPerFrame);
+		}
+
+		if (!loader.done())
+		{
+			Print(L"{}/{} "_fmt, loader.num_loaded(), 
+				stopwatch2.ms());
+			stopwatch2.restart();
+
+		}
+		else if (stopwatch.isActive())
+		{
+			Print(L"ロード完了: {}ms"_fmt, stopwatch.ms());
+
+			stopwatch.reset();
+		}
+	}
+}
+
+
+
 void Main()
 {
+	INIReader config(configFile);
+	updateConfig(config);
+	if (debugTexureLoadingBenchmark) {
+		benchmark();
+		benchmark2();
+		//while (System::Update()) {};
+		//return;
+	}
 	const Font font(30);
 	const Font font10(10);
 	// 見開きの描画用に最初の2枚を読んでおく
@@ -77,10 +299,19 @@ void Main()
 	Cursor::SetPos(0, 0);
 	Vec2 pos = Mouse::Pos();
 
-	INIReader config(L"C:/Users/nishio/Desktop/tmp/speedreader.ini");
-	updateConfig(config);
 
-	Stopwatch stopwatch;
+	Stopwatch stopwatch(true);
+	/*
+	Array<FilePath> paths;
+	for (auto i : step(10))
+		paths.push_back(Format(L"Images/{:0>4}.png"_fmt, i));
+
+	const bool startImmediately = true;
+
+	// バックグラウンド & マルチスレッドで、paths で指定した画像を読み込み開始
+	TextureLoader loader(paths, startImmediately);
+*/
+
 	while (System::Update())
 	{
 		double invFPS = stopwatch.ms();
@@ -94,7 +325,7 @@ void Main()
 		}
 
 		// まだ読み終わってなければ順次ロード
-		if (loadingPage < numPages) {			
+		if (loadingPage < numPages) {
 			if (!loadOneTexture(loadingPage)) {
 				numPages = loadingPage;
 				//Println(Format(L"Loaded:", numPages, L" pages"));
@@ -104,6 +335,7 @@ void Main()
 				loadingPage++;
 			}
 		}
+
 		auto controller = XInput(0);
 
 		controller.setLeftTriggerDeadZone();
