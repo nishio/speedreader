@@ -1,13 +1,6 @@
 ﻿#include <Siv3D.hpp>
-#include <cstdio>
-#include <string>
-#include <thread>
-#include <vector>
 #include "Main.h"
-#include "AssetLoader.hpp"
-
-# include <ppl.h>
-# include <ppltasks.h>
+#include "Loader.hpp"
 
 
 #ifdef DEPLOY
@@ -23,43 +16,11 @@ String sampleDocument(L"../Speedreader/speedreader/sample/");
 std::wstring displayOrder(L"LTR"); // Right to left(RTL): 0 LTR: 1
 double joystickPointerSpeed = 1.0;
 int drawingXOffset = 100;
-int numPages = 1;
 double viewingPage = 0;
 int displayMode = 1;
 int autoplaySpeed = 0;
 int debugTexureLoadingBenchmark;
-
-s3d::experimental::TextureLoader loader;
-Texture frontPage[2];
-void loadPDF() {
-	Array<FilePath> paths;
-	frontPage[0] = Texture(Format(L"{}pages_{:04d}.png"_fmt, currentDocument, 1));
-	frontPage[1] = Texture(Format(L"{}pages_{:04d}.png"_fmt, currentDocument, 2));
-
-	// TODO: iniにページ数が掛かれているならファイルシステムのチェックはいらない
-	// TODO: ddsがあればそちらを読むようにする
-	int i = 3;
-	while (true) {
-		auto path = Format(L"{}pages_{:04d}.png"_fmt, currentDocument, i);
-		if (!FileSystem::Exists(path)) break;
-		paths.push_back(path);
-		i++;
-	}
-	numPages = i - 1;
-	// TODO: numPagesが0なら警告する
-	loader = s3d::experimental::TextureLoader(paths, true);
-}
-
-Texture nullPage;
-const Texture& getPage(int i) {
-	if (i < 2) {
-		return frontPage[i];
-	}
-	if (i >= numPages || !loader.getState(i - 2)) {
-		return nullPage;
-	}
-	return loader.getAsset(i - 2);
-}
+int numPages;
 
 void loadPDFConfig() {
 	String filename = Format(currentDocument, L"config.ini");
@@ -86,7 +47,8 @@ void loadNewDocument(String path) {
 	loadPDFConfig();
 	viewingPage = 0;
 	displayMode = 1;
-	loadPDF();
+	loader::loadPDF(currentDocument);
+	numPages = loader::numPages;
 }
 
 void convertToDDS() {
@@ -119,7 +81,8 @@ void Main()
 	Vec2 pos = Mouse::Pos();
 
 	Stopwatch stopwatch(true);
-	loadPDF();
+	loader::loadPDF(currentDocument);
+	numPages = loader::numPages;
 
 	while (System::Update())
 	{
@@ -134,14 +97,7 @@ void Main()
 		}
 
 		// まだ読み終わってなければ順次ロード
-		if (loader.isActive() && !loader.done())
-		{
-			// ロードが完了した画像から順次 Texture を作成する。
-			// 1 回の upadate で作成する Texture の最大数を少なくすると、フレームレートの低下を防げるが、
-			// 最大数が 1　だと、100 枚の Texture を作成するには最低でも 100 フレーム必要になる。
-			const int32 maxTextureCreationPerFrame = 1;
-			loader.update(maxTextureCreationPerFrame);
-		}
+		loader::keepLoading();
 
 		auto controller = XInput(0);
 
@@ -190,6 +146,7 @@ void Main()
 		}
 		if (autoplaySpeed) {
 			viewingPage += autoplaySpeed * invFPS / 1000;
+			font10(L"自動再生: ", autoplaySpeed).draw(0, 0);
 		}
 
 		if (viewingPage < 0) viewingPage = 0;
@@ -199,8 +156,14 @@ void Main()
 			if (controller.buttonB.clicked || Input::KeyUp.clicked) viewingPage -= 0.5;
 		}
 		else {
-			if (controller.buttonA.clicked || Input::KeyDown.clicked) viewingPage++;
-			if (controller.buttonB.clicked || Input::KeyUp.clicked) viewingPage--;
+			if (controller.buttonA.clicked || Input::KeyDown.clicked) {
+				viewingPage++;
+				autoplaySpeed = 0;
+			}
+			if (controller.buttonB.clicked || Input::KeyUp.clicked) {
+				viewingPage--;
+				autoplaySpeed = 0;
+			}
 		}
 		// 最初・最後のページで前後に移動した時に反対側に飛ぶべきかどうか、今disabled
 		//if (page < 0) page += numPages;
@@ -218,8 +181,7 @@ void Main()
 			displayMode = (displayMode + 1);
 		}
 
-		if (!loader.getState(ipage)) continue;
-		Texture t = getPage(ipage);
+		Texture t = loader::getPage(ipage);
 		double h = static_cast<double>(t.height);
 		double w = static_cast<double>(t.width);
 		const int screenHeight = 640;
@@ -259,14 +221,7 @@ void Main()
 				for (int y = 0; y < numPageVertical; y++) {
 					for (int x = 0; x < numPageHorizontal; x++) {
 						int i = ipage + y * numPageHorizontal + x;
-						/*
-						if (i < numPages && loader.getState(i)) {
-							loader.getAsset(i)
-								.resize(pageWidth, pageHeight)
-								.draw(drawingXOffset + pageWidth * x, pageHeight * y);
-						}
-						*/
-						getPage(i)
+						loader::getPage(i)
 							.resize(pageWidth, pageHeight)
 							.draw(drawingXOffset + pageWidth * x, pageHeight * y);
 
@@ -279,14 +234,7 @@ void Main()
 				for (int y = 0; y < numPageVertical; y++) {
 					for (int x = 0; x < numPageHorizontal; x++) {
 						int i = ipage + y * numPageHorizontal + x;
-						/*
-						if (i < numPages && loader.getState(i)) {
-							loader.getAsset(i)
-								.resize(pageWidth, pageHeight)
-								.draw(drawingXOffset + pageWidth * (numPageHorizontal - x - 1), pageHeight * y);
-						}
-						*/
-						getPage(i)
+						loader::getPage(i)
 							.resize(pageWidth, pageHeight)
 							.draw(drawingXOffset + pageWidth * (numPageHorizontal - x - 1), pageHeight * y);
 

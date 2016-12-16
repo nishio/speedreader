@@ -356,6 +356,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="AssetLoader.hpp" />
+    <ClInclude Include="Loader.hpp" />
     <ClInclude Include="Main.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
