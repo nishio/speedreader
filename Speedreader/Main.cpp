@@ -20,7 +20,8 @@ struct CommonData {
 enum class sceneName {
 	Loading,
 	DisplayPages,
-	Books,
+	DisplaySinglePage,
+	DisplayBooks,
 };
 
 
@@ -33,6 +34,7 @@ int autoplaySpeed = 0;
 int debugTexureLoadingBenchmark;
 int numPages;
 XInput controller = XInput(0);
+Vec2 pos;
 
 void loadPDFConfig() {
 	String filename = Format(currentDocument, L"config.ini");
@@ -95,6 +97,7 @@ public:
 			autoplaySpeed = 0;
 		}
 
+		// Shift+Up/Downで1ページだけ前後する
 		if ((Input::KeyDown + Input::KeyShift).clicked) {
 			viewingPage++;
 			autoplaySpeed = 0;
@@ -102,6 +105,34 @@ public:
 		if ((Input::KeyUp + Input::KeyShift).clicked) {
 			viewingPage--;
 			autoplaySpeed = 0;
+		}
+
+		// Xボタンorクリックでそのページを通常表示
+		if (controller.buttonX.clicked || Input::MouseL.clicked) {
+			int ipage = static_cast<int>(viewingPage) % numPages;
+			Texture t = loader::getPage(ipage);
+			double h = static_cast<double>(t.height);
+			double w = static_cast<double>(t.width);
+
+			int screenHeight = Window::Height();
+			double pageHeight = screenHeight, pageWidth = w / h * pageHeight;
+			int numPageVertical = displayMode;
+			int numPageHorizontal = (Window::Width() - drawingXOffset) * displayMode / pageWidth; // 右に余白を作らず描けるだけ描く
+			pageHeight /= numPageVertical;
+			pageWidth /= numPageVertical;
+
+			if (Input::MouseL.clicked) {
+				pos = Mouse::Pos();
+			}
+			int x = static_cast<int>((pos.x - drawingXOffset) / pageWidth);
+			if (displayOrder != L"LTR") {
+				x = numPageHorizontal - x - 1;
+			}
+			int y = static_cast<int>(pos.y / pageHeight);
+			viewingPage = ipage + x + y * numPageHorizontal;
+			displayMode = 1;
+			Cursor::SetPos(0, 0);
+			pos = { 0, 0 };
 		}
 
 	}
@@ -119,11 +150,10 @@ public:
 		int numPageVertical = displayMode;
 		//int numPageHorizontal = displayMode * horizontalMultiplier;
 		int numPageHorizontal = (Window::Width() - drawingXOffset) * displayMode / pageWidth; // 右に余白を作らず描けるだけ描く
-
+		pageHeight /= numPageVertical;
+		pageWidth /= numPageVertical;
 																							  // Tile mode
 		if (displayOrder == L"LTR") {
-			pageHeight /= numPageVertical;
-			pageWidth /= numPageVertical;
 			for (int y = 0; y < numPageVertical; y++) {
 				for (int x = 0; x < numPageHorizontal; x++) {
 					int i = ipage + y * numPageHorizontal + x;
@@ -135,8 +165,6 @@ public:
 			}
 		}
 		else {
-			pageHeight /= numPageVertical;
-			pageWidth /= numPageVertical;
 			for (int y = 0; y < numPageVertical; y++) {
 				for (int x = 0; x < numPageHorizontal; x++) {
 					int i = ipage + y * numPageHorizontal + x;
@@ -152,10 +180,48 @@ public:
 	}
 };
 
+class DisplaySinglePage : public SceneManager<sceneName, CommonData>::Scene
+{
+public:
+	void init() override
+	{
+
+	}
+
+	void update() override
+	{
+		if (controller.buttonA.clicked || Input::KeyDown.clicked) viewingPage += 0.5;
+		if (controller.buttonB.clicked || Input::KeyUp.clicked) viewingPage -= 0.5;
+	}
+
+	void draw() const override
+	{
+		// Zoom-in mode
+		// いま2倍に拡大して半分ずつ表示する実装だが、もっとズームインしたり平行移動したりできた方がよいのではないか
+		int ipage = static_cast<int>(viewingPage) % numPages;
+		Texture t = loader::getPage(ipage);
+		double h = static_cast<double>(t.height);
+		double w = static_cast<double>(t.width);
+		int screenHeight = Window::Height();
+		double pageHeight = screenHeight, pageWidth = w / h * pageHeight;
+
+
+		int scale = 2;
+		if (static_cast<int>(viewingPage * 2) % 2 == 0) {
+			t.resize(pageWidth * scale, pageHeight * scale).draw(drawingXOffset, 0);
+		}
+		else {
+			t(0, h / 2, w, h / 2).resize(pageWidth * scale, pageHeight).draw(drawingXOffset, 0);
+		}
+	}
+};
+
 
 void Main()
 {
 	SceneManager<sceneName, CommonData> sceneManager;
+	sceneManager.add<DisplayPages>(sceneName::DisplayPages);
+	sceneManager.add<DisplaySinglePage>(sceneName::DisplaySinglePage);
 	sceneManager.add<DisplayPages>(sceneName::DisplayPages);
 
 	INIReader config(configFile);
@@ -172,7 +238,6 @@ void Main()
 	Window::SetStyle(WindowStyle::Sizeable);
 
 	Cursor::SetPos(0, 0);
-	Vec2 pos = Mouse::Pos();
 
 	Stopwatch stopwatch(true);
 	loader::loadPDF(currentDocument);
@@ -248,14 +313,9 @@ void Main()
 
 		if (viewingPage < 0) viewingPage = 0;
 		if (viewingPage > numPages - 1) viewingPage = numPages - 1;
-		if (displayMode == 0) {
-			if (controller.buttonA.clicked || Input::KeyDown.clicked) viewingPage += 0.5;
-			if (controller.buttonB.clicked || Input::KeyUp.clicked) viewingPage -= 0.5;
-		}
-		else {
-			// displayPages.update
-			sceneManager.update();
-		}
+
+		sceneManager.update();
+		
 
 		// 最初・最後のページで前後に移動した時に反対側に飛ぶべきかどうか、今disabled
 		//if (page < 0) page += numPages;
@@ -266,11 +326,16 @@ void Main()
 		int ipage = static_cast<int>(viewingPage) % numPages;
 
 		if (controller.buttonLB.clicked || Input::KeyZ.clicked) {
-			displayMode = (displayMode - 1);
-			if (displayMode < 0) displayMode = 0;
+			displayMode--;
+			if (displayMode == 0) {
+				sceneManager.changeScene(sceneName::DisplaySinglePage, 0, false);
+			}
 		}
 		if (controller.buttonRB.clicked || Input::KeyC.clicked) {
-			displayMode = (displayMode + 1);
+			displayMode++;
+			if (displayMode == 1) {
+				sceneManager.changeScene(sceneName::DisplayPages, 0, false);
+			}
 		}
 
 		Texture t = loader::getPage(ipage);
@@ -294,37 +359,8 @@ void Main()
 		const int32 w2 = font10(numPages).region().w;
 		font10(numPages).draw(drawingXOffset + progressBarWidth - w2, screenHeight + 12);
 
-		if (displayMode == 0) {
-			// Zoom-in mode
-			int scale = 2;
-			if (static_cast<int>(viewingPage * 2) % 2 == 0) {
-				t.resize(pageWidth * scale, pageHeight * scale).draw(drawingXOffset, 0);
-			}
-			else {
-				t(0, h / 2, w, h / 2).resize(pageWidth * scale, pageHeight).draw(drawingXOffset, 0);
-			}
-		}
-		else if(displayMode > 0) {
-			sceneManager.draw();
+		sceneManager.draw();
 
-/*
-			// Xボタンでそのページを通常表示
-			if (controller.buttonX.clicked || Input::MouseL.clicked) {
-				if (Input::MouseL.clicked) {
-					pos = Mouse::Pos();
-				}
-				int x = static_cast<int>((pos.x - drawingXOffset) / pageWidth);
-				if (displayOrder != L"LTR") {
-					x = numPageHorizontal - x - 1;
-				}
-				int y = static_cast<int>(pos.y / pageHeight);
-				viewingPage = ipage + x + y * numPageHorizontal;
-				displayMode = 1;
-				Cursor::SetPos(0, 0);
-				pos = { 0, 0 };
-			}
-			*/
-		}
 
 		// デモ用
 		if (controller.buttonY.clicked || Input::KeyY.clicked) {
