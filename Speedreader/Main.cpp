@@ -187,7 +187,8 @@ void Main()
 		Texture t = loader::getPage(ipage);
 		double h = static_cast<double>(t.height);
 		double w = static_cast<double>(t.width);
-		const int screenHeight = 640;
+		//const int screenHeight = 640;
+		int screenHeight = Window::Height();
 		double pageHeight = screenHeight, pageWidth = w / h * pageHeight;
 
 		int horizontalMultiplier = 2; // 見開きにするなら2、しないなら1
@@ -215,8 +216,10 @@ void Main()
 			}
 		}
 		else if(displayMode > 0) {
-			int numPageHorizontal = displayMode * horizontalMultiplier;
 			int numPageVertical = displayMode;
+			//int numPageHorizontal = displayMode * horizontalMultiplier;
+			int numPageHorizontal = (Window::Width() - drawingXOffset) * displayMode / pageWidth; // 右に余白を作らず描けるだけ描く
+
 			// Tile mode
 			if (displayOrder == L"LTR") {
 				pageHeight /= numPageVertical;
