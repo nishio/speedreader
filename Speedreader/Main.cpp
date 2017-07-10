@@ -1,7 +1,7 @@
 ﻿#include <Siv3D.hpp>
+#include <HamFramework.hpp>
 #include "Main.h"
 #include "Loader.hpp"
-
 
 #ifdef DEPLOY
 String currentDocument(L"./doc/");
@@ -13,6 +13,17 @@ String configFile(L"../Speedreader/speedreader.ini");
 String sampleDocument(L"../Speedreader/speedreader/sample/");
 #endif
 
+struct CommonData {
+
+};
+
+enum class sceneName {
+	Loading,
+	DisplayPages,
+	Books,
+};
+
+
 std::wstring displayOrder(L"LTR"); // Right to left(RTL): 0 LTR: 1
 double joystickPointerSpeed = 1.0;
 int drawingXOffset = 100;
@@ -21,6 +32,7 @@ int displayMode = 1;
 int autoplaySpeed = 0;
 int debugTexureLoadingBenchmark;
 int numPages;
+XInput controller = XInput(0);
 
 void loadPDFConfig() {
 	String filename = Format(currentDocument, L"config.ini");
@@ -62,8 +74,90 @@ void convertToDDS() {
 	}
 }
 
+int numDisplayingPages = 1;
+class DisplayPages : public SceneManager<sceneName, CommonData>::Scene
+{
+public:
+	void init() override
+	{
+
+	}
+
+	void update() override
+	{
+		// 表示されているページ分だけまとめて進める
+		if (controller.buttonA.clicked || Input::KeyDown.clicked) {
+			viewingPage += numDisplayingPages;
+			autoplaySpeed = 0;
+		}
+		if (controller.buttonB.clicked || Input::KeyUp.clicked) {
+			viewingPage -= numDisplayingPages;
+			autoplaySpeed = 0;
+		}
+
+		if ((Input::KeyDown + Input::KeyShift).clicked) {
+			viewingPage++;
+			autoplaySpeed = 0;
+		}
+		if ((Input::KeyUp + Input::KeyShift).clicked) {
+			viewingPage--;
+			autoplaySpeed = 0;
+		}
+
+	}
+
+	void draw() const override
+	{
+		int ipage = static_cast<int>(viewingPage) % numPages;
+		Texture t = loader::getPage(ipage);
+		double h = static_cast<double>(t.height);
+		double w = static_cast<double>(t.width);
+
+		int screenHeight = Window::Height();
+		double pageHeight = screenHeight, pageWidth = w / h * pageHeight;
+
+		int numPageVertical = displayMode;
+		//int numPageHorizontal = displayMode * horizontalMultiplier;
+		int numPageHorizontal = (Window::Width() - drawingXOffset) * displayMode / pageWidth; // 右に余白を作らず描けるだけ描く
+
+																							  // Tile mode
+		if (displayOrder == L"LTR") {
+			pageHeight /= numPageVertical;
+			pageWidth /= numPageVertical;
+			for (int y = 0; y < numPageVertical; y++) {
+				for (int x = 0; x < numPageHorizontal; x++) {
+					int i = ipage + y * numPageHorizontal + x;
+					loader::getPage(i)
+						.resize(pageWidth, pageHeight)
+						.draw(drawingXOffset + pageWidth * x, pageHeight * y);
+
+				}
+			}
+		}
+		else {
+			pageHeight /= numPageVertical;
+			pageWidth /= numPageVertical;
+			for (int y = 0; y < numPageVertical; y++) {
+				for (int x = 0; x < numPageHorizontal; x++) {
+					int i = ipage + y * numPageHorizontal + x;
+					loader::getPage(i)
+						.resize(pageWidth, pageHeight)
+						.draw(drawingXOffset + pageWidth * (numPageHorizontal - x - 1), pageHeight * y);
+
+				}
+			}
+		}
+		numDisplayingPages = numPageVertical * numPageHorizontal;
+
+	}
+};
+
+
 void Main()
 {
+	SceneManager<sceneName, CommonData> sceneManager;
+	sceneManager.add<DisplayPages>(sceneName::DisplayPages);
+
 	INIReader config(configFile);
 	updateConfig(config);
 
@@ -87,6 +181,13 @@ void Main()
 	// ESCでWindowを閉じない
 	System::SetExitEvent(WindowEvent::CloseButton);
 
+	controller = XInput(0);
+
+	controller.setLeftTriggerDeadZone();
+	controller.setRightTriggerDeadZone();
+	controller.setLeftThumbDeadZone();
+	controller.setRightThumbDeadZone();
+
 	while (System::Update())
 	{
 		double invFPS = stopwatch.ms();
@@ -101,13 +202,6 @@ void Main()
 
 		// まだ読み終わってなければ順次ロード
 		loader::keepLoading();
-
-		auto controller = XInput(0);
-
-		controller.setLeftTriggerDeadZone();
-		controller.setRightTriggerDeadZone();
-		controller.setLeftThumbDeadZone();
-		controller.setRightThumbDeadZone();
 
 		pos += Vec2(
 			controller.leftThumbX * joystickPointerSpeed * invFPS, 
@@ -159,15 +253,10 @@ void Main()
 			if (controller.buttonB.clicked || Input::KeyUp.clicked) viewingPage -= 0.5;
 		}
 		else {
-			if (controller.buttonA.clicked || Input::KeyDown.clicked) {
-				viewingPage++;
-				autoplaySpeed = 0;
-			}
-			if (controller.buttonB.clicked || Input::KeyUp.clicked) {
-				viewingPage--;
-				autoplaySpeed = 0;
-			}
+			// displayPages.update
+			sceneManager.update();
 		}
+
 		// 最初・最後のページで前後に移動した時に反対側に飛ぶべきかどうか、今disabled
 		//if (page < 0) page += numPages;
 		//if (page > numPages - 1) page = 0;
@@ -216,38 +305,9 @@ void Main()
 			}
 		}
 		else if(displayMode > 0) {
-			int numPageVertical = displayMode;
-			//int numPageHorizontal = displayMode * horizontalMultiplier;
-			int numPageHorizontal = (Window::Width() - drawingXOffset) * displayMode / pageWidth; // 右に余白を作らず描けるだけ描く
+			sceneManager.draw();
 
-			// Tile mode
-			if (displayOrder == L"LTR") {
-				pageHeight /= numPageVertical;
-				pageWidth /= numPageVertical;
-				for (int y = 0; y < numPageVertical; y++) {
-					for (int x = 0; x < numPageHorizontal; x++) {
-						int i = ipage + y * numPageHorizontal + x;
-						loader::getPage(i)
-							.resize(pageWidth, pageHeight)
-							.draw(drawingXOffset + pageWidth * x, pageHeight * y);
-
-					}
-				}
-			}
-			else {
-				pageHeight /= numPageVertical;
-				pageWidth /= numPageVertical;
-				for (int y = 0; y < numPageVertical; y++) {
-					for (int x = 0; x < numPageHorizontal; x++) {
-						int i = ipage + y * numPageHorizontal + x;
-						loader::getPage(i)
-							.resize(pageWidth, pageHeight)
-							.draw(drawingXOffset + pageWidth * (numPageHorizontal - x - 1), pageHeight * y);
-
-					}
-				}
-			}
-
+/*
 			// Xボタンでそのページを通常表示
 			if (controller.buttonX.clicked || Input::MouseL.clicked) {
 				if (Input::MouseL.clicked) {
@@ -263,6 +323,7 @@ void Main()
 				Cursor::SetPos(0, 0);
 				pos = { 0, 0 };
 			}
+			*/
 		}
 
 		// デモ用
