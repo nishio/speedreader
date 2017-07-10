@@ -84,6 +84,9 @@ void Main()
 	loader::loadPDF(currentDocument);
 	numPages = loader::numPages;
 
+	// ESCでWindowを閉じない
+	System::SetExitEvent(WindowEvent::CloseButton);
+
 	while (System::Update())
 	{
 		double invFPS = stopwatch.ms();
