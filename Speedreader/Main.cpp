@@ -18,7 +18,7 @@ struct CommonData {
 };
 
 enum class sceneName {
-	Loading,
+	LoadPages,
 	DisplayPages,
 	DisplaySinglePage,
 	DisplayBooks,
@@ -35,6 +35,8 @@ int debugTexureLoadingBenchmark;
 int numPages;
 XInput controller = XInput(0);
 Vec2 pos;
+SceneManager<sceneName, CommonData> sceneManager;
+
 
 void loadPDFConfig() {
 	String filename = Format(currentDocument, L"config.ini");
@@ -61,6 +63,7 @@ void loadNewDocument(String path) {
 	loadPDFConfig();
 	viewingPage = 0;
 	displayMode = 1;
+	sceneManager.changeScene(sceneName::DisplayPages, 0, false);
 	loader::loadPDF(currentDocument);
 	numPages = loader::numPages;
 }
@@ -134,6 +137,15 @@ public:
 			Cursor::SetPos(0, 0);
 			pos = { 0, 0 };
 		}
+
+		// 最初・最後のページで前後に移動した時に反対側に飛ぶべきかどうか、今disabled
+		//if (page < 0) page += numPages;
+		//if (page > numPages - 1) page = 0;
+		if (viewingPage < 0) viewingPage = 0;
+		if (viewingPage > numPages - 1) viewingPage = numPages - 1;
+
+		// まだ読み終わってなければ順次ロード
+		loader::keepLoading();
 
 	}
 
@@ -216,11 +228,150 @@ public:
 	}
 };
 
+class LoadPages : public SceneManager<sceneName, CommonData>::Scene
+{
+public:
+	void init() override
+	{
+
+
+	}
+
+	void update() override
+	{
+		// まだ読み終わってなければ順次ロード
+		loader::keepLoading();
+	}
+
+	void draw() const override
+	{
+
+	}
+};
+
+class DisplayBooks : public SceneManager<sceneName, CommonData>::Scene
+{
+public:
+	Array<FilePath> pathToBookImages;
+	Array<Texture> bookImages;
+	Array<FilePath> pathToBooks;
+	int viewingBooks = 0;
+	int numBooks = 0;
+	void init() override
+	{
+		Array<FilePath> contents = FileSystem::DirectoryContents(
+			L"C:/Users/nishio/Desktop/books");
+
+		for (const auto& content : contents)
+		{
+			if (FileSystem::IsDirectory(content))
+			{
+				auto path = Format(L"{}/cover.png"_fmt, content);
+				if (!FileSystem::Exists(path)) {
+					path = Format(L"{}/pages_0001.png"_fmt, content);
+				}
+				if (FileSystem::Exists(path)) {
+					pathToBookImages.push_back(path);
+					pathToBooks.push_back(content);
+				}
+			}
+		}
+		numBooks = pathToBookImages.size();
+		bookImages.resize(numBooks);
+		for (int i = 0; i < numBooks; i++) {
+			bookImages[i] = Texture(pathToBookImages[i]);
+		}
+		viewingPage = 0;
+	}
+
+	void update() override
+	{
+		// 表示されているページ分だけまとめて進める
+		if (controller.buttonA.clicked || Input::KeyDown.clicked) {
+			viewingBooks += numDisplayingPages;
+			autoplaySpeed = 0;
+		}
+		if (controller.buttonB.clicked || Input::KeyUp.clicked) {
+			viewingBooks -= numDisplayingPages;
+			autoplaySpeed = 0;
+		}
+
+		// Xボタンorクリックでそのページを通常表示
+		if (controller.buttonX.clicked || Input::MouseL.clicked) {
+			Texture t = getBook(viewingBooks);
+			double h = static_cast<double>(t.height);
+			double w = static_cast<double>(t.width);
+
+			int screenHeight = Window::Height();
+			double pageHeight = screenHeight, pageWidth = w / h * pageHeight;
+			int numPageVertical = displayMode;
+			int numPageHorizontal = (Window::Width() - drawingXOffset) * displayMode / pageWidth; // 右に余白を作らず描けるだけ描く
+			pageHeight /= numPageVertical;
+			pageWidth /= numPageVertical;
+
+			if (Input::MouseL.clicked) {
+				pos = Mouse::Pos();
+			}
+			int x = static_cast<int>((pos.x - drawingXOffset) / pageWidth);
+			if (displayOrder != L"LTR") {
+				x = numPageHorizontal - x - 1;
+			}
+			int y = static_cast<int>(pos.y / pageHeight);
+			int iBook = viewingBooks + x + y * numPageHorizontal;
+			if (iBook < pathToBooks.size()) {
+				loadNewDocument(pathToBooks[iBook]);
+			}
+			Cursor::SetPos(0, 0);
+			pos = { 0, 0 };
+		}
+
+	}
+
+	void draw() const override
+	{
+		int numPages = pathToBookImages.size();
+		int ipage = static_cast<int>(viewingPage) % numPages;
+		Texture t = bookImages[ipage];
+		double h = static_cast<double>(t.height);
+		double w = static_cast<double>(t.width);
+
+		int screenHeight = Window::Height();
+		double pageHeight = screenHeight, pageWidth = w / h * pageHeight;
+
+		displayMode = 5;
+		int numPageVertical = displayMode;
+		//int numPageHorizontal = displayMode * horizontalMultiplier;
+		int numPageHorizontal = (Window::Width() - drawingXOffset) * displayMode / pageWidth; // 右に余白を作らず描けるだけ描く
+		pageHeight /= numPageVertical;
+		pageWidth /= numPageVertical;
+		// Tile mode
+		for (int y = 0; y < numPageVertical; y++) {
+			for (int x = 0; x < numPageHorizontal; x++) {
+				int i = ipage + y * numPageHorizontal + x;
+				getBook(i)
+					.resize(pageWidth, pageHeight)
+					.draw(drawingXOffset + pageWidth * x, pageHeight * y);
+
+			}
+		}
+		numDisplayingPages = numPageVertical * numPageHorizontal;
+
+	}
+
+	const Texture& getBook(int i) const {
+		if (i < bookImages.size()) {
+			return bookImages[i];
+		}
+		else {
+			return nullPage;
+		}
+	}
+	Texture nullPage;
+};
 
 void Main()
 {
-	SceneManager<sceneName, CommonData> sceneManager;
-	sceneManager.add<DisplayPages>(sceneName::DisplayPages);
+	sceneManager.add<DisplayBooks>(sceneName::DisplayBooks);
 	sceneManager.add<DisplaySinglePage>(sceneName::DisplaySinglePage);
 	sceneManager.add<DisplayPages>(sceneName::DisplayPages);
 
@@ -230,7 +381,6 @@ void Main()
 	const Font font(30);
 	const Font font10(10);
 
-	loadPDFConfig();
 
 	Window::SetTitle(L"Speedreader");
 	Window::Resize(1300, 700);
@@ -240,13 +390,9 @@ void Main()
 	Cursor::SetPos(0, 0);
 
 	Stopwatch stopwatch(true);
-	loader::loadPDF(currentDocument);
-	numPages = loader::numPages;
 
 	// ESCでWindowを閉じない
 	System::SetExitEvent(WindowEvent::CloseButton);
-
-	controller = XInput(0);
 
 	controller.setLeftTriggerDeadZone();
 	controller.setRightTriggerDeadZone();
@@ -265,8 +411,6 @@ void Main()
 			loadNewDocument(items[0]);
 		}
 
-		// まだ読み終わってなければ順次ロード
-		loader::keepLoading();
 
 		pos += Vec2(
 			controller.leftThumbX * joystickPointerSpeed * invFPS, 
@@ -284,12 +428,13 @@ void Main()
 		viewingPage += controller.rightThumbY / 5;  // slow
 
 		// キーでのパラパラめくり// 早送り巻き戻しメタファー
+		const int initial_speed = 4; // 秒間1ページなどの低速で自動送りしたいケースがなかったので最初から連打より速めに設定
 		if (Input::KeyRight.clicked) {
 			if (autoplaySpeed > 0) {
 				autoplaySpeed *= 2;
 			}
 			else if (autoplaySpeed == 0) {
-				autoplaySpeed = 1;
+				autoplaySpeed = initial_speed;
 			}
 			else {
 				autoplaySpeed = 0;
@@ -300,7 +445,7 @@ void Main()
 				autoplaySpeed *= 2;
 			}
 			else if (autoplaySpeed == 0) {
-				autoplaySpeed = -1;
+				autoplaySpeed = -initial_speed;
 			}
 			else {
 				autoplaySpeed = 0;
@@ -311,19 +456,7 @@ void Main()
 			font10(L"自動再生: ", autoplaySpeed).draw(0, 0);
 		}
 
-		if (viewingPage < 0) viewingPage = 0;
-		if (viewingPage > numPages - 1) viewingPage = numPages - 1;
-
 		sceneManager.update();
-		
-
-		// 最初・最後のページで前後に移動した時に反対側に飛ぶべきかどうか、今disabled
-		//if (page < 0) page += numPages;
-		//if (page > numPages - 1) page = 0;
-		if (viewingPage < 0) viewingPage = 0;
-		if (viewingPage > numPages - 1) viewingPage = numPages - 1;
-
-		int ipage = static_cast<int>(viewingPage) % numPages;
 
 		if (controller.buttonLB.clicked || Input::KeyZ.clicked) {
 			displayMode--;
@@ -338,6 +471,8 @@ void Main()
 			}
 		}
 
+		/*
+		int ipage = static_cast<int>(viewingPage) % numPages;
 		Texture t = loader::getPage(ipage);
 		double h = static_cast<double>(t.height);
 		double w = static_cast<double>(t.width);
@@ -358,13 +493,14 @@ void Main()
 
 		const int32 w2 = font10(numPages).region().w;
 		font10(numPages).draw(drawingXOffset + progressBarWidth - w2, screenHeight + 12);
+		*/
 
 		sceneManager.draw();
 
 
-		// デモ用
-		if (controller.buttonY.clicked || Input::KeyY.clicked) {
-			loadNewDocument(sampleDocument);
+		// 書籍一覧
+		if (controller.buttonY.clicked || Input::KeyX.clicked) {
+			sceneManager.changeScene(sceneName::DisplayBooks, 0, false);
 		}
 
 		// カーソル表示
