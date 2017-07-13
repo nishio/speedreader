@@ -37,7 +37,6 @@ XInput controller = XInput(0);
 Vec2 pos;
 SceneManager<sceneName, CommonData> sceneManager;
 
-
 void loadPDFConfig() {
 	String filename = Format(currentDocument, L"config.ini");
 	INIReader ini(filename);
@@ -63,7 +62,7 @@ void loadNewDocument(String path) {
 	loadPDFConfig();
 	viewingPage = 0;
 	numPageVertical = 1;
-	sceneManager.changeScene(sceneName::DisplayPages, 0, false);
+	sceneManager.changeScene(sceneName::LoadPages, 0, false);
 	loader::loadPDF(currentDocument);
 	numPages = loader::numPages;
 }
@@ -236,6 +235,8 @@ class LoadPages : public SceneManager<sceneName, CommonData>::Scene
 public:
 	void init() override
 	{
+		font10 = Font(10);
+
 	}
 
 	void update() override
@@ -247,13 +248,18 @@ public:
 
 		// まだ読み終わってなければ順次ロード
 		loader::keepLoading();
+		// ロード中のページが画面に収まらないならズームアウトする
+		if (loader::loadingPage > numDisplayingPages) {
+			numPageVertical++;
+		}
 	}
 
 	void draw() const override
 	{
-		
+		font10.draw(L"Loading", 0, 30);
 		drawPages();
 	}
+	Font font10;
 };
 
 class DisplayBooks : public SceneManager<sceneName, CommonData>::Scene
@@ -379,6 +385,7 @@ void Main()
 	sceneManager.add<DisplayBooks>(sceneName::DisplayBooks);
 	sceneManager.add<DisplaySinglePage>(sceneName::DisplaySinglePage);
 	sceneManager.add<DisplayPages>(sceneName::DisplayPages);
+	sceneManager.add<LoadPages>(sceneName::LoadPages);
 
 	INIReader config(configFile);
 	updateConfig(config);
@@ -407,7 +414,7 @@ void Main()
 	while (System::Update())
 	{
 		double invFPS = stopwatch.ms();
-		font10(L"FPS: ", 1.0 / invFPS).draw(0, 10);
+		font10(L"FPS: ", 1000.0 / invFPS).draw(0, 10);
 		stopwatch.restart();
 		if (config.hasChanged()) updateConfig(config);
 
