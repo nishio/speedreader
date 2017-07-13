@@ -29,7 +29,7 @@ std::wstring displayOrder(L"LTR"); // Right to left(RTL): 0 LTR: 1
 double joystickPointerSpeed = 1.0;
 int drawingXOffset = 100;
 double viewingPage = 0;
-int displayMode = 1;
+int numPageVertical = 1;
 int autoplaySpeed = 0;
 int debugTexureLoadingBenchmark;
 int numPages;
@@ -62,7 +62,7 @@ void loadNewDocument(String path) {
 	Profiler::EnableWarning(false); // 再読み込み時のテクスチャ破棄で警告されるので読み終わるまでdisable
 	loadPDFConfig();
 	viewingPage = 0;
-	displayMode = 1;
+	numPageVertical = 1;
 	sceneManager.changeScene(sceneName::DisplayPages, 0, false);
 	loader::loadPDF(currentDocument);
 	numPages = loader::numPages;
@@ -80,6 +80,45 @@ void convertToDDS() {
 }
 
 int numDisplayingPages = 1;
+void drawPages() {
+	int ipage = static_cast<int>(viewingPage) % numPages;
+	Texture t = loader::getPage(ipage);
+	double h = static_cast<double>(t.height);
+	double w = static_cast<double>(t.width);
+
+	int screenHeight = Window::Height();
+	double pageHeight = screenHeight, pageWidth = w / h * pageHeight;
+
+	//int numPageHorizontal = displayMode * horizontalMultiplier;
+	int numPageHorizontal = static_cast<int>((Window::Width() - drawingXOffset) * numPageVertical / pageWidth); // 右に余白を作らず描けるだけ描く
+	pageHeight /= numPageVertical;
+	pageWidth /= numPageVertical;
+	// Tile mode
+	if (displayOrder == L"LTR") {
+		for (int y = 0; y < numPageVertical; y++) {
+			for (int x = 0; x < numPageHorizontal; x++) {
+				int i = ipage + y * numPageHorizontal + x;
+				loader::getPage(i)
+					.resize(pageWidth, pageHeight)
+					.draw(drawingXOffset + pageWidth * x, pageHeight * y);
+
+			}
+		}
+	}
+	else {
+		for (int y = 0; y < numPageVertical; y++) {
+			for (int x = 0; x < numPageHorizontal; x++) {
+				int i = ipage + y * numPageHorizontal + x;
+				loader::getPage(i)
+					.resize(pageWidth, pageHeight)
+					.draw(drawingXOffset + pageWidth * (numPageHorizontal - x - 1), pageHeight * y);
+
+			}
+		}
+	}
+	numDisplayingPages = numPageVertical * numPageHorizontal;
+}
+
 class DisplayPages : public SceneManager<sceneName, CommonData>::Scene
 {
 public:
@@ -119,8 +158,7 @@ public:
 
 			int screenHeight = Window::Height();
 			double pageHeight = screenHeight, pageWidth = w / h * pageHeight;
-			int numPageVertical = displayMode;
-			int numPageHorizontal = (Window::Width() - drawingXOffset) * displayMode / pageWidth; // 右に余白を作らず描けるだけ描く
+			int numPageHorizontal = static_cast<int>((Window::Width() - drawingXOffset) * numPageVertical / pageWidth); // 右に余白を作らず描けるだけ描く
 			pageHeight /= numPageVertical;
 			pageWidth /= numPageVertical;
 
@@ -133,7 +171,7 @@ public:
 			}
 			int y = static_cast<int>(pos.y / pageHeight);
 			viewingPage = ipage + x + y * numPageHorizontal;
-			displayMode = 1;
+			numPageVertical = 1;
 			Cursor::SetPos(0, 0);
 			pos = { 0, 0 };
 		}
@@ -151,46 +189,11 @@ public:
 
 	void draw() const override
 	{
-		int ipage = static_cast<int>(viewingPage) % numPages;
-		Texture t = loader::getPage(ipage);
-		double h = static_cast<double>(t.height);
-		double w = static_cast<double>(t.width);
-
-		int screenHeight = Window::Height();
-		double pageHeight = screenHeight, pageWidth = w / h * pageHeight;
-
-		int numPageVertical = displayMode;
-		//int numPageHorizontal = displayMode * horizontalMultiplier;
-		int numPageHorizontal = (Window::Width() - drawingXOffset) * displayMode / pageWidth; // 右に余白を作らず描けるだけ描く
-		pageHeight /= numPageVertical;
-		pageWidth /= numPageVertical;
-																							  // Tile mode
-		if (displayOrder == L"LTR") {
-			for (int y = 0; y < numPageVertical; y++) {
-				for (int x = 0; x < numPageHorizontal; x++) {
-					int i = ipage + y * numPageHorizontal + x;
-					loader::getPage(i)
-						.resize(pageWidth, pageHeight)
-						.draw(drawingXOffset + pageWidth * x, pageHeight * y);
-
-				}
-			}
-		}
-		else {
-			for (int y = 0; y < numPageVertical; y++) {
-				for (int x = 0; x < numPageHorizontal; x++) {
-					int i = ipage + y * numPageHorizontal + x;
-					loader::getPage(i)
-						.resize(pageWidth, pageHeight)
-						.draw(drawingXOffset + pageWidth * (numPageHorizontal - x - 1), pageHeight * y);
-
-				}
-			}
-		}
-		numDisplayingPages = numPageVertical * numPageHorizontal;
-
+		drawPages();
 	}
 };
+
+
 
 class DisplaySinglePage : public SceneManager<sceneName, CommonData>::Scene
 {
@@ -233,19 +236,23 @@ class LoadPages : public SceneManager<sceneName, CommonData>::Scene
 public:
 	void init() override
 	{
-
-
 	}
 
 	void update() override
 	{
+		if (controller.buttonA.clicked || Input::KeyDown.clicked) {
+			numPageVertical = 1;
+			sceneManager.changeScene(sceneName::DisplayPages, 0, false);
+		}
+
 		// まだ読み終わってなければ順次ロード
 		loader::keepLoading();
 	}
 
 	void draw() const override
 	{
-
+		
+		drawPages();
 	}
 };
 
@@ -255,7 +262,7 @@ public:
 	Array<FilePath> pathToBookImages;
 	Array<Texture> bookImages;
 	Array<FilePath> pathToBooks;
-	int viewingBooks = 0;
+	uint32 viewingBooks = 0;
 	int numBooks = 0;
 	void init() override
 	{
@@ -304,8 +311,7 @@ public:
 
 			int screenHeight = Window::Height();
 			double pageHeight = screenHeight, pageWidth = w / h * pageHeight;
-			int numPageVertical = displayMode;
-			int numPageHorizontal = (Window::Width() - drawingXOffset) * displayMode / pageWidth; // 右に余白を作らず描けるだけ描く
+			int numPageHorizontal = static_cast<int>((Window::Width() - drawingXOffset) * numPageVertical / pageWidth); // 右に余白を作らず描けるだけ描く
 			pageHeight /= numPageVertical;
 			pageWidth /= numPageVertical;
 
@@ -317,7 +323,7 @@ public:
 				x = numPageHorizontal - x - 1;
 			}
 			int y = static_cast<int>(pos.y / pageHeight);
-			int iBook = viewingBooks + x + y * numPageHorizontal;
+			uint32 iBook = viewingBooks + x + y * numPageHorizontal;
 			if (iBook < pathToBooks.size()) {
 				loadNewDocument(pathToBooks[iBook]);
 			}
@@ -329,7 +335,7 @@ public:
 
 	void draw() const override
 	{
-		int numPages = pathToBookImages.size();
+		numPages = pathToBookImages.size(); // 本当はこのシーンに遷移するタイミングでこの代入が行われるべきなのだけどやってない
 		int ipage = static_cast<int>(viewingPage) % numPages;
 		Texture t = bookImages[ipage];
 		double h = static_cast<double>(t.height);
@@ -338,10 +344,9 @@ public:
 		int screenHeight = Window::Height();
 		double pageHeight = screenHeight, pageWidth = w / h * pageHeight;
 
-		displayMode = 5;
-		int numPageVertical = displayMode;
+		numPageVertical = 5;
 		//int numPageHorizontal = displayMode * horizontalMultiplier;
-		int numPageHorizontal = (Window::Width() - drawingXOffset) * displayMode / pageWidth; // 右に余白を作らず描けるだけ描く
+		int numPageHorizontal = static_cast<int>((Window::Width() - drawingXOffset) * numPageVertical / pageWidth); // 右に余白を作らず描けるだけ描く
 		pageHeight /= numPageVertical;
 		pageWidth /= numPageVertical;
 		// Tile mode
@@ -358,7 +363,7 @@ public:
 
 	}
 
-	const Texture& getBook(int i) const {
+	const Texture& getBook(uint32 i) const {
 		if (i < bookImages.size()) {
 			return bookImages[i];
 		}
@@ -402,6 +407,7 @@ void Main()
 	while (System::Update())
 	{
 		double invFPS = stopwatch.ms();
+		font10(L"FPS: ", 1.0 / invFPS).draw(0, 10);
 		stopwatch.restart();
 		if (config.hasChanged()) updateConfig(config);
 
@@ -459,14 +465,14 @@ void Main()
 		sceneManager.update();
 
 		if (controller.buttonLB.clicked || Input::KeyZ.clicked) {
-			displayMode--;
-			if (displayMode == 0) {
+			numPageVertical--;
+			if (numPageVertical == 0) {
 				sceneManager.changeScene(sceneName::DisplaySinglePage, 0, false);
 			}
 		}
 		if (controller.buttonRB.clicked || Input::KeyC.clicked) {
-			displayMode++;
-			if (displayMode == 1) {
+			numPageVertical++;
+			if (numPageVertical == 1) {
 				sceneManager.changeScene(sceneName::DisplayPages, 0, false);
 			}
 		}
