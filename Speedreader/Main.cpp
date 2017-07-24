@@ -49,6 +49,21 @@ void loadPDFConfig() {
 	displayOrder = ini.getOr<std::wstring>(L"displayOrder", L"LTR");
 }
 
+void savePDFConfig() {
+	String filename = Format(currentDocument, L"config.ini");
+	INIWriter default_ini(filename);
+	default_ini.write(L"displayOrder", displayOrder);
+}
+
+void reverseDisplayOrder() {
+	if (displayOrder == L"LTR") {
+		displayOrder = L"RTL";
+	}
+	else {
+		displayOrder = L"LTR";
+	}
+}
+
 void updateConfig(INIReader	config) {
 	config.reload();
 	joystickPointerSpeed = config.getOr<double>(L"Controller.PointerSpeed", 1.0);
@@ -62,9 +77,10 @@ void loadNewDocument(String path) {
 	loadPDFConfig();
 	viewingPage = 0;
 	numPageVertical = 1;
-	sceneManager.changeScene(sceneName::LoadPages, 0, false);
 	loader::loadPDF(currentDocument);
 	numPages = loader::numPages;
+	//sceneManager.go(sceneName::LoadPages);
+	sceneManager.changeScene(sceneName::LoadPages, 0, false);
 }
 
 void convertToDDS() {
@@ -128,6 +144,36 @@ public:
 
 	void update() override
 	{
+		viewingPage -= pow(controller.leftTrigger, 2);
+		viewingPage += pow(controller.rightTrigger, 2);
+
+		viewingPage += controller.rightThumbY / 5;  // slow
+
+													// キーでのパラパラめくり// 早送り巻き戻しメタファー
+		const int initial_speed = 4; // 秒間1ページなどの低速で自動送りしたいケースがなかったので最初から連打より速めに設定
+		if (Input::KeyRight.clicked) {
+			if (autoplaySpeed > 0) {
+				autoplaySpeed *= 2;
+			}
+			else if (autoplaySpeed == 0) {
+				autoplaySpeed = initial_speed;
+			}
+			else {
+				autoplaySpeed = 0;
+			}
+		}
+		if (Input::KeyLeft.clicked) {
+			if (autoplaySpeed < 0) {
+				autoplaySpeed *= 2;
+			}
+			else if (autoplaySpeed == 0) {
+				autoplaySpeed = -initial_speed;
+			}
+			else {
+				autoplaySpeed = 0;
+			}
+		}
+
 		// 表示されているページ分だけまとめて進める
 		if (controller.buttonA.clicked || Input::KeyDown.clicked) {
 			viewingPage += numDisplayingPages;
@@ -146,6 +192,11 @@ public:
 		if ((Input::KeyUp + Input::KeyShift).clicked) {
 			viewingPage--;
 			autoplaySpeed = 0;
+		}
+
+		if (autoplaySpeed) {
+			viewingPage += autoplaySpeed * invFPS / 1000;
+			font10(L"自動再生: ", autoplaySpeed).draw(0, 0);
 		}
 
 		// Xボタンorクリックでそのページを通常表示
@@ -270,8 +321,13 @@ public:
 	Array<FilePath> pathToBooks;
 	uint32 viewingBooks = 0;
 	int numBooks = 0;
+	Font font10;
+
 	void init() override
 	{
+		font10 = Font(10);
+		viewingPage = 0;
+		numPageVertical = 5;
 		Array<FilePath> contents = FileSystem::DirectoryContents(
 			L"C:/Users/nishio/Desktop/books");
 
@@ -295,6 +351,7 @@ public:
 			bookImages[i] = Texture(pathToBookImages[i]);
 		}
 		viewingPage = 0;
+		numPages = pathToBookImages.size(); // 本当はこのシーンに遷移するタイミングでこの代入が行われるべきなのだけどやってない
 	}
 
 	void update() override
@@ -341,7 +398,7 @@ public:
 
 	void draw() const override
 	{
-		numPages = pathToBookImages.size(); // 本当はこのシーンに遷移するタイミングでこの代入が行われるべきなのだけどやってない
+		font10(L"DisplayBooks").draw(0, 20);
 		int ipage = static_cast<int>(viewingPage) % numPages;
 		Texture t = bookImages[ipage];
 		double h = static_cast<double>(t.height);
@@ -350,7 +407,6 @@ public:
 		int screenHeight = Window::Height();
 		double pageHeight = screenHeight, pageWidth = w / h * pageHeight;
 
-		numPageVertical = 5;
 		//int numPageHorizontal = displayMode * horizontalMultiplier;
 		int numPageHorizontal = static_cast<int>((Window::Width() - drawingXOffset) * numPageVertical / pageWidth); // 右に余白を作らず描けるだけ描く
 		pageHeight /= numPageVertical;
@@ -386,13 +442,12 @@ void Main()
 	sceneManager.add<DisplaySinglePage>(sceneName::DisplaySinglePage);
 	sceneManager.add<DisplayPages>(sceneName::DisplayPages);
 	sceneManager.add<LoadPages>(sceneName::LoadPages);
-
+	sceneManager.changeScene(sceneName::DisplayBooks, 0, false);
 	INIReader config(configFile);
 	updateConfig(config);
 
 	const Font font(30);
-	const Font font10(10);
-
+	font10 = Font(10);
 
 	Window::SetTitle(L"Speedreader");
 	Window::Resize(1300, 700);
@@ -411,11 +466,20 @@ void Main()
 	controller.setLeftThumbDeadZone();
 	controller.setRightThumbDeadZone();
 
+	double msecFromLastFPSUpdate = 0;
+	int FPS;
 	while (System::Update())
 	{
-		double invFPS = stopwatch.ms();
-		font10(L"FPS: ", 1000.0 / invFPS).draw(0, 10);
+		invFPS = stopwatch.ms();
+		msecFromLastFPSUpdate += invFPS;
+		if (msecFromLastFPSUpdate > 500) {
+			FPS = static_cast<int>(1000.0 / invFPS);
+			msecFromLastFPSUpdate = 0;
+		}
+
+		font10(L"FPS: ", FPS).draw(0, 10);
 		stopwatch.restart();
+
 		if (config.hasChanged()) updateConfig(config);
 
 		if (Dragdrop::HasItems())
@@ -433,41 +497,6 @@ void Main()
 		if (pos.y < 0) pos.y = 0;
 		if (pos.x > Window::Width()) pos.x = Window::Width();
 		if (pos.y > Window::Height()) pos.y = Window::Height();
-
-
-		viewingPage -= pow(controller.leftTrigger, 2);
-		viewingPage += pow(controller.rightTrigger, 2);
-
-		viewingPage += controller.rightThumbY / 5;  // slow
-
-		// キーでのパラパラめくり// 早送り巻き戻しメタファー
-		const int initial_speed = 4; // 秒間1ページなどの低速で自動送りしたいケースがなかったので最初から連打より速めに設定
-		if (Input::KeyRight.clicked) {
-			if (autoplaySpeed > 0) {
-				autoplaySpeed *= 2;
-			}
-			else if (autoplaySpeed == 0) {
-				autoplaySpeed = initial_speed;
-			}
-			else {
-				autoplaySpeed = 0;
-			}
-		}
-		if (Input::KeyLeft.clicked) {
-			if (autoplaySpeed < 0) {
-				autoplaySpeed *= 2;
-			}
-			else if (autoplaySpeed == 0) {
-				autoplaySpeed = -initial_speed;
-			}
-			else {
-				autoplaySpeed = 0;
-			}
-		}
-		if (autoplaySpeed) {
-			viewingPage += autoplaySpeed * invFPS / 1000;
-			font10(L"自動再生: ", autoplaySpeed).draw(0, 0);
-		}
 
 		sceneManager.update();
 
@@ -514,6 +543,10 @@ void Main()
 		// 書籍一覧
 		if (controller.buttonY.clicked || Input::KeyX.clicked) {
 			sceneManager.changeScene(sceneName::DisplayBooks, 0, false);
+		}
+
+		if (Input::KeyR.clicked) {
+			reverseDisplayOrder();
 		}
 
 		// カーソル表示
