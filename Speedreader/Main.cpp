@@ -14,7 +14,6 @@ String sampleDocument(L"../Speedreader/speedreader/sample/");
 #endif
 
 struct CommonData {
-
 };
 
 enum class sceneName {
@@ -35,7 +34,27 @@ int debugTexureLoadingBenchmark;
 int numPages;
 XInput controller = XInput(0);
 Vec2 pos;
+double invFPS;
+Font font10;
 SceneManager<sceneName, CommonData> sceneManager;
+
+
+int progressBarWidth = 20;
+
+int infoPaneLeft = progressBarWidth + 2;
+int infoPaneTop = 20;
+int infoPaneSlotHeight = 20;
+enum class infoPaneSlot {
+	FPS,
+	Mode,
+	IsAutoPlay,
+	AutoSpeed,
+};
+
+void infoPaneDraw(DrawableString s, infoPaneSlot y) {
+	s.draw(infoPaneLeft, infoPaneSlotHeight * static_cast<int>(y) + infoPaneTop);
+}
+
 
 void loadPDFConfig() {
 	String filename = Format(currentDocument, L"config.ini");
@@ -79,7 +98,6 @@ void loadNewDocument(String path) {
 	numPageVertical = 1;
 	loader::loadPDF(currentDocument);
 	numPages = loader::numPages;
-	//sceneManager.go(sceneName::LoadPages);
 	sceneManager.changeScene(sceneName::LoadPages, 0, false);
 }
 
@@ -196,7 +214,6 @@ public:
 
 		if (autoplaySpeed) {
 			viewingPage += autoplaySpeed * invFPS / 1000;
-			font10(L"自動再生: ", autoplaySpeed).draw(0, 0);
 		}
 
 		// Xボタンorクリックでそのページを通常表示
@@ -239,6 +256,25 @@ public:
 
 	void draw() const override
 	{
+		infoPaneDraw(font10(L"DisplayPages"), infoPaneSlot::Mode);
+		if (autoplaySpeed) {
+			infoPaneDraw(font10(L"自動再生: "), infoPaneSlot::IsAutoPlay);
+			infoPaneDraw(font10(autoplaySpeed), infoPaneSlot::AutoSpeed);
+		}
+		// draw progress bar
+		int numberLeft = 2;
+		int numberVOffset = 2;
+		int screenHeight = Window::Height();
+		Rect(0, 0, progressBarWidth, screenHeight).draw(Color(200));
+		int ipage = static_cast<int>(viewingPage) % numPages;
+
+		Rect(numberLeft, 0,
+			16, screenHeight * (ipage + 1) / numPages).draw(Color(100));
+		font10(ipage + 1).draw(numberLeft, numberVOffset);
+
+		const int32 h2 = font10(numPages).region().h;
+		font10(numPages).draw(numberLeft, screenHeight - h2 - numberVOffset);
+
 		drawPages();
 	}
 };
@@ -286,8 +322,6 @@ class LoadPages : public SceneManager<sceneName, CommonData>::Scene
 public:
 	void init() override
 	{
-		font10 = Font(10);
-
 	}
 
 	void update() override
@@ -307,10 +341,9 @@ public:
 
 	void draw() const override
 	{
-		font10.draw(L"Loading", 0, 30);
+		infoPaneDraw(font10(L"Loading"), infoPaneSlot::Mode);
 		drawPages();
 	}
-	Font font10;
 };
 
 class DisplayBooks : public SceneManager<sceneName, CommonData>::Scene
@@ -321,11 +354,9 @@ public:
 	Array<FilePath> pathToBooks;
 	uint32 viewingBooks = 0;
 	int numBooks = 0;
-	Font font10;
 
 	void init() override
 	{
-		font10 = Font(10);
 		viewingPage = 0;
 		numPageVertical = 5;
 		Array<FilePath> contents = FileSystem::DirectoryContents(
@@ -338,6 +369,9 @@ public:
 				auto path = Format(L"{}/cover.png"_fmt, content);
 				if (!FileSystem::Exists(path)) {
 					path = Format(L"{}/pages_0001.png"_fmt, content);
+				}
+				if (!FileSystem::Exists(path)) {
+					path = Format(L"{}/page-001.png"_fmt, content);
 				}
 				if (FileSystem::Exists(path)) {
 					pathToBookImages.push_back(path);
@@ -398,26 +432,39 @@ public:
 
 	void draw() const override
 	{
-		font10(L"DisplayBooks").draw(0, 20);
+		infoPaneDraw(font10(L"DisplayBooks"), infoPaneSlot::Mode);
+
 		int ipage = static_cast<int>(viewingPage) % numPages;
 		Texture t = bookImages[ipage];
 		double h = static_cast<double>(t.height);
 		double w = static_cast<double>(t.width);
 
 		int screenHeight = Window::Height();
-		double pageHeight = screenHeight, pageWidth = w / h * pageHeight;
-
-		//int numPageHorizontal = displayMode * horizontalMultiplier;
-		int numPageHorizontal = static_cast<int>((Window::Width() - drawingXOffset) * numPageVertical / pageWidth); // 右に余白を作らず描けるだけ描く
-		pageHeight /= numPageVertical;
-		pageWidth /= numPageVertical;
-		// Tile mode
+		double pageHeight = screenHeight / numPageVertical;
+		double pageWidth = pageHeight; // 横長のPDFもあるので枠は正方形にする
+		int numPageHorizontal = static_cast<int>((Window::Width() - drawingXOffset)  / pageWidth); // 右に余白を作らず描けるだけ描く
+																								   // Tile mode
 		for (int y = 0; y < numPageVertical; y++) {
 			for (int x = 0; x < numPageHorizontal; x++) {
 				int i = ipage + y * numPageHorizontal + x;
-				getBook(i)
-					.resize(pageWidth, pageHeight)
-					.draw(drawingXOffset + pageWidth * x, pageHeight * y);
+				Texture book = getBook(i);
+				h = static_cast<double>(book.height);
+				w = static_cast<double>(book.width);
+				double ox, oy;
+				if (h > w) {
+					w = pageWidth * w / h;
+					h = pageWidth;
+					oy = 0;
+					ox = (pageWidth - w) / 2;
+				}
+				else {
+					h = pageWidth * h / w;
+					w = pageWidth;
+					ox = 0;
+					oy = (pageWidth - h) / 2;
+				}
+				book.resize(w, h)
+					.draw(drawingXOffset + pageWidth * x + ox, pageHeight * y + oy);
 
 			}
 		}
@@ -472,12 +519,12 @@ void Main()
 	{
 		invFPS = stopwatch.ms();
 		msecFromLastFPSUpdate += invFPS;
-		if (msecFromLastFPSUpdate > 500) {
+		if (msecFromLastFPSUpdate > 250) {
 			FPS = static_cast<int>(1000.0 / invFPS);
 			msecFromLastFPSUpdate = 0;
 		}
 
-		font10(L"FPS: ", FPS).draw(0, 10);
+		infoPaneDraw(font10(L"FPS: ", FPS), infoPaneSlot::FPS);
 		stopwatch.restart();
 
 		if (config.hasChanged()) updateConfig(config);
@@ -525,16 +572,6 @@ void Main()
 		int horizontalMultiplier = 2; // 見開きにするなら2、しないなら1
 		if (h < w) horizontalMultiplier = 1;
 
-		// draw progress bar
-		int progressBarWidth = static_cast<int>(pageWidth * horizontalMultiplier);
-		Rect(drawingXOffset, screenHeight + 10,
-			progressBarWidth, 20).draw(Color(200));
-		Rect(drawingXOffset, screenHeight + 12,
-			progressBarWidth * (ipage + 1) / numPages, 16).draw(Color(100));
-		font10(ipage + 1).draw(drawingXOffset, screenHeight + 12);
-
-		const int32 w2 = font10(numPages).region().w;
-		font10(numPages).draw(drawingXOffset + progressBarWidth - w2, screenHeight + 12);
 		*/
 
 		sceneManager.draw();
